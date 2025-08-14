@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gym Tracker</title>
+  <meta name="description" content="Track workouts, sets, and PRs. All local, no sign-in." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='0.9em' font-size='90'>🏋️‍♂️</text></svg>">
+  <!-- Tailwind (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Optional custom styles */
+    html, body { height: 100%; }
+    .card { border-radius: 1rem; box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
+    .btn { border-radius: 1rem; }
+    .btn-primary { background: linear-gradient(90deg,#6366f1,#a855f7); color: #fff; }
+    .btn-danger { background: #fee2e2; color: #b91c1c; }
+    .btn-plain { background: #f3f4f6; }
+    .chip { font-size: 0.75rem; color:#6b7280; }
+    /* Hide number input spinners */
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+  </style>
+  <!-- React 18, ReactDOM, and Babel for in-browser JSX transform -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-gray-50">
+  <div id="root"></div>
+
+  <script type="text/babel">
+const { useEffect, useState, useMemo } = React;
+
+const API = 'http://localhost:3001/api';
+
+function AuthApp() {
+  const [user, setUser] = useState(null);
+  const [mode, setMode] = useState('login'); // or 'register'
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  function handleAuth(e) {
+    e.preventDefault();
+    setError('');
+    fetch(`${API}/${mode}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    })
+      .then(r => r.json())
+      .then(res => {
+        if (res.ok) setUser(username);
+        else setError(res.error || 'Error');
+      });
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <form onSubmit={handleAuth} className="card bg-white p-6 w-full max-w-xs space-y-4">
+          <h2 className="text-xl font-bold">{mode === 'login' ? 'Login' : 'Register'}</h2>
+          <input className="w-full border rounded p-2" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
+          <input className="w-full border rounded p-2" type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
+          {error && <div className="text-red-500 text-sm">{error}</div>}
+          <button className="btn btn-primary w-full py-2">{mode === 'login' ? 'Login' : 'Register'}</button>
+          <button type="button" className="w-full text-sm text-blue-600" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}>
+            {mode === 'login' ? 'No account? Register' : 'Have an account? Login'}
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  return <GymTrackerApp user={user} onLogout={() => setUser(null)} />;
+}
+
+// --- Main App, now with user prop and backend sync ---
+function GymTrackerApp({ user, onLogout }) {
+  const [data, setData] = useState({ exercises: [], logs: [] });
+  const [loading, setLoading] = useState(true);
+
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
+  const [exerciseName, setExerciseName] = useState('');
+  const [notes, setNotes] = useState('');
+  const [logExerciseId, setLogExerciseId] = useState('');
+  const [logSets, setLogSets] = useState([{ reps: '', weight: '' }]);
+  const [filterExercise, setFilterExercise] = useState('all');
+  const [search, setSearch] = useState('');
+
+  // Fetch user data from backend
+  useEffect(() => {
+    setLoading(true);
+    fetch(`${API}/logs?username=${encodeURIComponent(user)}`)
+      .then(r => r.json())
+      .then(d => { setData(d); setLoading(false); });
+  }, [user]);
+
+  // Save to backend on data change
+  useEffect(() => {
+    if (!loading)
+      fetch(`${API}/logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: user, data })
+      });
+  }, [data, user, loading]);
+
+  const uid = () => Math.random().toString(36).slice(2, 9);
+
+  // Exercises CRUD
+  function addExercise() {
+    if (!exerciseName.trim()) return;
+    const newEx = { id: uid(), name: exerciseName.trim(), notes: notes.trim() };
+    setData(prev => ({ ...prev, exercises: [...prev.exercises, newEx] }));
+    setExerciseName(''); setNotes('');
+  }
+  function removeExercise(id) {
+    if (!confirm('Remove exercise and associated logs?')) return;
+    setData(prev => ({
+      exercises: prev.exercises.filter(e => e.id !== id),
+      logs: prev.logs.map(l => ({ ...l, items: l.items.filter(it => it.exerciseId !== id) })),
+    }));
+  }
+
+  // Logging
+  function addSetRow() { setLogSets(prev => [...prev, { reps: '', weight: '' }]); }
+  function updateSet(idx, key, val) {
+    setLogSets(prev => prev.map((s, i) => i === idx ? { ...s, [key]: val } : s));
+  }
+  function removeSet(idx) { setLogSets(prev => prev.filter((_, i) => i !== idx)); }
+  function saveLog() {
+    if (!logExerciseId) return alert('Choose an exercise');
+    const parsedSets = logSets
+      .map(s => ({ reps: Number(s.reps || 0), weight: Number(s.weight || 0) }))
+      .filter(s => s.reps > 0 || s.weight > 0);
+    if (!parsedSets.length) return alert('Add at least one set');
+    const newLog = { id: uid(), date: selectedDate, items: [{ exerciseId: logExerciseId, sets: parsedSets }] };
+    setData(prev => ({ ...prev, logs: [newLog, ...prev.logs] }));
+    setLogExerciseId(''); setLogSets([{ reps: '', weight: '' }]);
+  }
+
+  // PRs
+  function calculatePR(exId) {
+    let best = null;
+    for (const log of data.logs) {
+      for (const item of log.items) {
+        if (item.exerciseId !== exId) continue;
+        for (const s of item.sets) {
+          const w = Number(s.weight || 0);
+          if (w > 0 && (best === null || w > best)) best = w;
+        }
+      }
+    }
+    return best;
+  }
+
+  // Export / Import
+  function exportJSON() {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'gym-tracker-export.json'; a.click();
+    URL.revokeObjectURL(url);
+  }
+  function importJSON(evt) {
+    const f = evt.target.files?.[0]; if (!f) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      try { setData(JSON.parse(e.target.result)); } catch { alert('Invalid JSON file'); }
+    };
+    reader.readAsText(f);
+  }
+
+  // Derived views
+  const exercisesFiltered = useMemo(
+    () => data.exercises.filter(e => e.name.toLowerCase().includes(search.toLowerCase())),
+    [data.exercises, search]
+  );
+  const logsFiltered = useMemo(() => {
+    return data.logs.filter(l => {
+      if (filterExercise !== 'all') return l.items.some(it => it.exerciseId === filterExercise);
+      return true;
+    }).filter(l => {
+      if (!search.trim()) return true;
+      return l.items.some(it => {
+        const ex = data.exercises.find(e => e.id === it.exerciseId);
+        return ex && ex.name.toLowerCase().includes(search.toLowerCase());
+      });
+    });
+  }, [data.logs, data.exercises, filterExercise, search]);
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+
+  return (
+    <div className="min-h-screen p-6">
+      <header className="max-w-6xl mx-auto mb-4 flex items-center justify-between">
+        <h1 className="text-2xl md:text-3xl font-bold">🏋️‍♂️ Gym Tracker</h1>
+        <div className="flex gap-2">
+          <button onClick={exportJSON} className="btn btn-plain px-4 py-2 border">Export</button>
+          <label className="btn btn-plain px-4 py-2 border cursor-pointer">
+            Import
+            <input type="file" accept="application/json" onChange={importJSON} className="hidden" />
+          </label>
+          <button onClick={onLogout} className="btn btn-plain px-4 py-2 border">Logout</button>
+        </div>
+      </header>
+
+      <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Exercise Library */}
+        <section className="card bg-white p-4 md:col-span-1">
+          <h2 className="text-xl font-semibold">Exercise Library</h2>
+          <div className="mt-3">
+            <input className="w-full border rounded p-2 mb-2" placeholder="Exercise name" value={exerciseName} onChange={e => setExerciseName(e.target.value)} />
+            <textarea className="w-full border rounded p-2 mb-2" placeholder="Notes (optional)" value={notes} onChange={e => setNotes(e.target.value)} />
+            <button onClick={addExercise} className="btn btn-primary w-full py-2 font-medium">Add Exercise</button>
+          </div>
+
+          <div className="mt-4">
+            <input className="w-full border rounded p-2 mb-3" placeholder="Search exercises" value={search} onChange={e => setSearch(e.target.value)} />
+            <ul className="space-y-2 max-h-72 overflow-auto">
+              {exercisesFiltered.map(ex => (
+                <li key={ex.id} className="flex items-center justify-between p-2 border rounded">
+                  <div>
+                    <div className="font-medium">{ex.name}</div>
+                    <div className="chip">PR: {calculatePR(ex.id) ?? '—'} kg</div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button title="Use for logging" onClick={() => setLogExerciseId(ex.id)} className={`px-2 py-1 rounded ${logExerciseId === ex.id ? 'bg-gray-200' : 'bg-gray-100'}`}>Select</button>
+                    <button onClick={() => removeExercise(ex.id)} className="px-2 py-1 rounded btn-danger">Del</button>
+                  </div>
+                </li>
+              ))}
+              {exercisesFiltered.length === 0 && <li className="text-sm text-gray-400">No exercises yet</li>}
+            </ul>
+          </div>
+        </section>
+
+        {/* Logging */}
+        <section className="card bg-white p-4 md:col-span-2">
+          <h2 className="text-xl font-semibold">Log Workout</h2>
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-sm text-gray-600">Date</label>
+              <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} className="w-full border rounded p-2" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm text-gray-600">Exercise</label>
+              <select className="w-full border rounded p-2" value={logExerciseId} onChange={e => setLogExerciseId(e.target.value)}>
+                <option value="">-- choose exercise --</option>
+                {data.exercises.map(ex => <option key={ex.id} value={ex.id}>{ex.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            <div className="text-sm text-gray-600">Sets</div>
+            <div className="space-y-2 mt-2">
+              {logSets.map((s, i) => (
+                <div key={i} className="flex gap-2 items-center">
+                  <input type="number" min="0" placeholder="Reps" value={s.reps} onChange={e => updateSet(i, 'reps', e.target.value)} className="w-24 border rounded p-2" />
+                  <input type="number" min="0" step="0.5" placeholder="Weight" value={s.weight} onChange={e => updateSet(i, 'weight', e.target.value)} className="w-28 border rounded p-2" />
+                  <div className="chip">kg</div>
+                  <button onClick={() => removeSet(i)} className="ml-auto px-3 py-1 rounded btn-danger">Remove</button>
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 flex gap-2">
+              <button onClick={addSetRow} className="px-3 py-2 rounded border btn-plain">Add set</button>
+              <button onClick={saveLog} className="px-3 py-2 rounded btn btn-primary text-white">Save log</button>
+            </div>
+          </div>
+
+          {/* Filters & History */}
+          <div className="mt-6">
+            <h3 className="font-medium">History</h3>
+            <div className="mt-2 flex gap-2 items-center">
+              <select value={filterExercise} onChange={e => setFilterExercise(e.target.value)} className="border rounded p-2">
+                <option value="all">All exercises</option>
+                {data.exercises.map(ex => <option key={ex.id} value={ex.id}>{ex.name}</option>)}
+              </select>
+              <input placeholder="Search" value={search} onChange={e => setSearch(e.target.value)} className="border rounded p-2 flex-1" />
+              <button onClick={() => { setFilterExercise('all'); setSearch(''); }} className="px-3 py-2 border rounded btn-plain">Reset</button>
+            </div>
+
+            <div className="mt-3 max-h-64 overflow-auto border rounded p-2">
+              {logsFiltered.length === 0 && <div className="text-gray-400">No logs</div>}
+              <ul className="space-y-3">
+                {logsFiltered.map(log => (
+                  <li key={log.id} className="p-2 bg-gray-50 rounded">
+                    <div className="text-sm text-gray-600">{log.date}</div>
+                    {log.items.map(it => {
+                      const ex = data.exercises.find(e => e.id === it.exerciseId) || { name: 'Unknown' };
+                      return (
+                        <div key={it.exerciseId} className="mt-1">
+                          <div className="font-medium">{ex.name}</div>
+                          <div className="chip">Sets:</div>
+                          <ul className="mt-1">
+                            {it.sets.map((s, idx) => (
+                              <li key={idx} className="text-sm">{s.reps} reps × {s.weight} kg</li>
+                            ))}
+                          </ul>
+                        </div>
+                      );
+                    })}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <footer className="max-w-6xl mx-auto mt-6 text-sm text-gray-500">
+        Tip: PRs show highest weight recorded. Export your data to back it up. Everything is stored locally in your browser.
+      </footer>
+    </div>
+  );
+}
+
+// Render
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<AuthApp />);
+  </script>
+</body>
+</html>
