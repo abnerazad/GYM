@@ -1,0 +1,15 @@
+    {
+      "version": 2,
+      "builds": [
+        {
+          "src": "server.js", // Or your server.js file path
+          "use": "@vercel/node"
+        }
+      ],
+      "rewrites": [
+        {
+          "source": "/(.*)",
+          "destination": "/api" // Or the directory containing your server.js
+        }
+      ]
+    }
